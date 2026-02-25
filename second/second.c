@@ -14,13 +14,13 @@ hello_command_fn (vlib_main_t * vm,
 
 /* CLI command definition */
 VLIB_CLI_COMMAND (hello_command, static) = {
-    .path = "main",
-    .short_help = "hello - print hello message",
+    .path = "second",
+    .short_help = "hello - print Author Name",
     .function = hello_command_fn,
 };
 
 /* Plugin registration */
 VLIB_PLUGIN_REGISTER () = {
     //  .version = VPP_BUILD_VER,
-    .description = "My First VPP Plugin",
+    .description = "My Second VPP Plugin",
 };
