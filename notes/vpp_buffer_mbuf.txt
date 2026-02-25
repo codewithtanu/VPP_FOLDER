@@ -1,0 +1,221 @@
+🔥 Short Answer
+
+In VPP with the DPDK plugin:
+
+We do NOT convert rte_mbuf into vlib_buffer_t.
+We also do NOT store the entire rte_mbuf inside vlib_buffer_t.
+
+Instead:
+
+VPP uses its own buffer (vlib_buffer_t) and copies only the required metadata from rte_mbuf.
+
+The packet data itself is shared, not copied.
+
+🚀 Step-by-Step: What Really Happens
+1️⃣ NIC Receives Packet
+
+NIC performs DMA:
+
+NIC → writes packet into DPDK mempool buffer
+
+That buffer is described by:
+
+struct rte_mbuf
+
+So at this point:
+
+Packet data is in hugepage memory
+
+Managed by DPDK mempool
+
+Owned by DPDK
+
+2️⃣ VPP Polls Using DPDK
+
+Inside dpdk-input node:
+
+rte_eth_rx_burst(...)
+
+This returns:
+
+struct rte_mbuf *mbufs[N];
+
+Now VPP has mbuf pointers.
+
+🔥 Now Important Part
+
+VPP does NOT operate on rte_mbuf.
+
+VPP has its own buffer system:
+
+typedef struct {
+    /* metadata */
+    u32 current_data;
+    u32 current_length;
+    u32 flags;
+    ...
+} vlib_buffer_t;
+
+VPP graph engine expects:
+
+u32 buffer_index
+
+not rte_mbuf *.
+
+🔹 What VPP Actually Does
+
+Inside dpdk-input node:
+
+Allocate VPP buffers from VPP buffer pool
+
+Copy minimal metadata from rte_mbuf
+
+Attach packet data pointer to VPP buffer
+
+Free or recycle rte_mbuf
+
+So conceptually:
+
+rte_mbuf (DPDK world)
+        ↓
+Extract packet pointer
+        ↓
+Initialize vlib_buffer_t
+        ↓
+Use VPP buffer in graph
+🧠 Important: Is Packet Data Copied?
+
+❌ No full packet copy.
+
+VPP tries to:
+
+Avoid copying packet payload
+
+Reuse the same underlying data memory
+
+But metadata structure changes.
+
+🔥 So What Is Relationship?
+
+It is NOT:
+
+vlib_buffer_t contains rte_mbuf
+
+It is NOT:
+
+rte_mbuf converted into vlib_buffer_t
+
+It is:
+
+DPDK gives mbuf
+↓
+VPP extracts info
+↓
+Creates its own vlib_buffer_t
+↓
+Points to same packet data
+
+Think of it like:
+
+rte_mbuf = DPDK wrapper
+
+vlib_buffer_t = VPP wrapper
+
+Data memory = same
+
+📦 Visual Representation
+
+Before VPP touches it:
+
+[ rte_mbuf ]
+     ↓
+[ packet data in hugepage ]
+
+After VPP dpdk-input:
+
+[ vlib_buffer_t ]  →  [ same packet data ]
+
+The rte_mbuf is no longer needed after that stage.
+
+🔥 Why Not Just Use rte_mbuf Directly in VPP?
+
+Because VPP:
+
+Has its own buffer management
+
+Has its own metadata layout
+
+Has chaining support
+
+Has feature arcs
+
+Has graph scheduling
+
+Has its own memory layout optimized for cache
+
+If VPP depended on rte_mbuf:
+
+Tight coupling with DPDK
+
+Hard to support other drivers
+
+Hard to optimize cache alignment
+
+So VPP abstracts it.
+
+🔍 Real Internal Mechanism
+
+In dpdk-input node:
+
+VPP gets burst of mbufs
+
+For each mbuf:
+
+Get data pointer:
+
+rte_pktmbuf_mtod(mbuf, void *)
+
+Allocate VPP buffer
+
+Set:
+
+b->current_data
+b->current_length
+b->flags
+
+Now graph continues using:
+
+buffer_index
+
+not mbuf.
+
+🔥 What Happens to rte_mbuf Then?
+
+After extraction:
+
+mbuf is freed back to DPDK mempool
+
+Or recycled
+
+VPP now owns the packet data via its own buffer
+
+🚀 Summary
+
+Your confusion was between:
+
+Option	Correct?
+Convert mbuf into vlib_buffer	❌ No
+Store mbuf inside vlib_buffer	❌ No
+Extract metadata + reuse packet memory	✅ YES
+
+So:
+
+VPP re-wraps packet data into its own buffer structure.
+
+🎯 Why This Design Is Powerful
+
+✔ VPP independent from DPDK
+✔ Can support AF_PACKET, memif, virtio, etc.
+✔ Uniform buffer system
+✔ Optimized for graph engine
+✔ Cache aligned metadata

@@ -1,0 +1,307 @@
+🧠 1️⃣ What is the Graph in VPP?
+
+In FD.io VPP, packet processing is organized as a directed graph.
+
+That means:
+
+Each node = a C function
+
+Each edge = possible next node
+
+Packets move node → node → node
+
+Processing happens in vectors (batches)
+
+Example simplified IPv4 path:
+
+dpdk-input
+      ↓
+ethernet-input
+      ↓
+ip4-input
+      ↓
+ip4-lookup
+      ↓
+ip4-rewrite
+      ↓
+interface-output
+
+Each block above = one node
+Each arrow = one edge
+
+🏗 2️⃣ How Graph Works Internally
+Step 1 — Graph is built at startup
+
+When VPP starts:
+
+All nodes register themselves.
+
+VPP assigns:
+
+Node index
+
+Next node indices
+
+Graph adjacency list is created.
+
+So graph structure is prebuilt at boot time.
+
+Step 2 — Packet Processing Loop
+
+Each worker thread runs:
+
+while (1) {
+   pick next runnable node
+   get frame
+   call node function
+}
+
+Each node function:
+
+Receives a frame (vector of packets)
+
+Processes packets
+
+Decides next node for each packet
+
+Enqueues packets to correct next node frame
+
+🔷 3️⃣ What is a Node?
+
+A node is just a C function with metadata.
+
+Conceptually:
+
+Node = processing logic + list of possible next nodes
+
+Types of nodes:
+
+Type	Description
+Input	Polls hardware (DPDK input)
+Internal	Normal graph node
+Process	Event-driven node
+🔶 4️⃣ How Nodes Are Created
+
+Nodes are registered using a macro:
+
+VLIB_REGISTER_NODE (my_node) = {
+    .name = "my-node",
+    .function = my_node_fn,
+    .type = VLIB_NODE_TYPE_INTERNAL,
+    .n_next_nodes = 2,
+    .next_nodes = {
+        [0] = "next-node-1",
+        [1] = "next-node-2",
+    },
+};
+
+Let’s break this.
+
+🔹 .name
+
+Unique string identifier of the node.
+
+Example:
+
+"ip4-lookup"
+🔹 .function
+
+Main processing function:
+
+uword my_node_fn (vlib_main_t *vm,
+                  vlib_node_runtime_t *node,
+                  vlib_frame_t *frame)
+
+This is where packets are processed.
+
+🔹 .n_next_nodes
+
+Number of outgoing edges.
+
+🔹 .next_nodes
+
+Array of node names.
+
+This defines the edges.
+
+So edges are created by:
+
+current node → next node names
+
+VPP resolves names into indices during startup.
+
+🔷 5️⃣ How Edges Work
+
+Internally, each node stores:
+
+node->next_nodes[index] = next_node_index
+
+During execution:
+
+next_index = MY_NODE_NEXT_FORWARD;
+
+VPP uses that index to find:
+
+node->next_nodes[next_index]
+
+That gives actual next node ID.
+
+🔥 Example — Simple Forward Node
+
+Suppose we create:
+
+Node A
+  → Node B
+  → Node C
+
+Registration:
+
+.next_nodes = {
+   [0] = "node-b",
+   [1] = "node-c",
+}
+
+During processing:
+
+if (packet_good)
+    next_index = 0;   // send to node-b
+else
+    next_index = 1;   // send to node-c
+
+That’s how edges are selected at runtime.
+
+🔄 6️⃣ How Packets Move Between Nodes
+
+Very important concept:
+
+VPP does NOT call next node directly.
+
+Instead:
+
+Node processes packets.
+
+Packets are grouped by next node.
+
+For each next node:
+
+A new frame is created.
+
+Packets are added.
+
+Scheduler later runs that next node.
+
+So graph execution is frame-based, not function-call chain based.
+
+This is the major difference from recursive pipelines.
+
+🧵 7️⃣ How Graph is Scheduled
+
+There is a scheduler inside VPP:
+
+Keeps list of active nodes
+
+Tracks which nodes have frames ready
+
+Executes in order
+
+Avoids recursion
+
+So execution is:
+
+Node A runs
+Node A produces frames for B & C
+Scheduler later runs B
+Scheduler later runs C
+⚡ 8️⃣ Why Graph Model Is Powerful
+
+Compared to DPDK poll loop:
+
+DPDK	VPP
+Manual pipeline	Automatic graph
+Hardcoded next calls	Flexible edge selection
+Complex scaling	Built-in worker graph
+
+Advantages:
+
+Modular
+
+Easy to add plugins
+
+Dynamic feature arcs
+
+Vectorized performance
+
+🧠 9️⃣ Feature Arcs (Advanced Graph Concept)
+
+In VPP, some edges are dynamic.
+
+Example:
+
+For IPv4 input:
+
+ip4-input → feature arc → ip4-lookup
+
+Feature arc allows:
+
+ACL
+
+NAT
+
+IPsec
+
+QoS
+
+to insert themselves between nodes without changing base code.
+
+That is advanced graph engineering.
+
+🏁 10️⃣ Complete Execution Example
+
+Packet arrives:
+
+dpdk-input (input node)
+   ↓
+ethernet-input
+   ↓
+ip4-input
+   ↓
+ip4-lookup
+   ↓
+ip4-rewrite
+   ↓
+interface-output
+
+Each step:
+
+Processes vector
+
+Selects next index
+
+Enqueues packets
+
+Scheduler picks next node
+
+🧩 Mental Model Summary
+
+Think of VPP graph as:
+
+Prebuilt Directed Graph
++
+Frame-based vector execution
++
+Dynamic edge selection
++
+Scheduler-driven execution
+🎯 Important Things You Must Understand
+
+To truly master graph:
+
+Node registration
+
+Next node indices
+
+Frame enqueue mechanism
+
+Scheduler behavior
+
+Worker thread graph copies
