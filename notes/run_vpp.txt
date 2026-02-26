@@ -1,0 +1,214 @@
+1️⃣ What You Are Running
+
+You are running:
+
+sudo build-root/install-vpp-native/vpp/bin/vpp \
+  -c build-root/install-vpp-native/vpp/etc/vpp/startup.conf
+
+This means:
+
+You built VPP from source
+
+You are running the VPP binary directly from the build directory
+
+You are explicitly passing a custom startup.conf
+
+This is called:
+
+🔹 Running VPP from source build (development mode)
+
+This is completely correct.
+
+2️⃣ What sudo vppctl Actually Does
+
+vppctl is NOT VPP.
+
+It is just the CLI client tool.
+
+Architecture:
++----------------+
+|     vppctl     |  <-- CLI client
++----------------+
+        |
+        |  (socket connection)
+        v
++----------------+
+|      VPP       |  <-- Main dataplane process
++----------------+
+
+So when you do:
+
+sudo vppctl
+
+It connects to:
+
+/run/vpp/cli.sock
+
+But this only works if:
+
+VPP is already running in background
+
+Usually started via systemd service:
+
+sudo systemctl start vpp
+
+So:
+
+Command	What it does
+vpp	Starts VPP process
+vppctl	Connects to running VPP
+3️⃣ What Your Friend Is Doing (make run-release)
+
+When your friend runs:
+
+make run-release
+
+That is from inside VPP source directory.
+
+This does:
+
+Build release version
+
+Start VPP
+
+Attach CLI automatically
+
+Internally it runs something similar to:
+
+./build-root/install-vpp-native/vpp/bin/vpp
+
+So it's just a helper command for developers.
+
+4️⃣ Different Ways to Run VPP
+
+There are 3 common ways:
+
+🔹 Method 1 — Installed Package Mode
+
+If VPP is installed via:
+
+sudo apt install vpp
+
+Then:
+
+sudo systemctl start vpp
+sudo vppctl
+
+This is production mode.
+
+Binary location:
+
+/usr/bin/vpp
+🔹 Method 2 — Build From Source (What You’re Doing)
+
+Binary location:
+
+build-root/install-vpp-native/vpp/bin/vpp
+
+You manually start:
+
+sudo ./vpp -c startup.conf
+
+This is development/testing mode.
+
+🔹 Method 3 — make run-release (Developer Shortcut)
+
+Runs VPP directly from source build.
+
+Mostly used by:
+
+VPP contributors
+
+Developers modifying VPP code
+
+5️⃣ Are You Using Wrong VPP?
+
+❌ No.
+
+You are using:
+
+Source-built VPP (developer mode)
+
+Your friend is using:
+
+Same source build but via make helper command
+
+Earlier when you used sudo vppctl, that was probably:
+
+Installed VPP from apt (system-wide)
+
+6️⃣ How To Check Which VPP You’re Using
+
+Run:
+
+which vpp
+
+If it shows:
+
+/usr/bin/vpp
+
+→ That is installed version
+
+If not found:
+→ You are only using source-built VPP
+
+Also check version:
+
+vppctl show version
+
+You earlier showed:
+
+vpp v25.10
+
+So your source build is working fine.
+
+7️⃣ Important Internal Difference
+When you run:
+sudo vppctl
+
+You are:
+
+Connecting to an already running VPP process
+
+When you run:
+sudo build-root/.../vpp
+
+You are:
+
+Starting a NEW VPP instance
+
+Big difference.
+
+8️⃣ When Should You Use Each?
+
+Since you're studying internals (DPDK, graph nodes, packet path etc.), you SHOULD use:
+
+✅ Source build mode (what you’re doing)
+
+Because:
+
+You can modify source
+
+You can debug
+
+You can trace internal function calls
+
+You can experiment with DPDK integration
+
+9️⃣ Summary Table
+Method	Type	Used For
+sudo vppctl	CLI client	Connect to running VPP
+sudo vpp	Start VPP	Manual run
+make run-release	Dev helper	Auto run from source
+systemctl start vpp	Service mode	Production
+🔥 Final Answer
+
+You did NOT install wrong VPP.
+
+You are simply running:
+
+Source-built VPP manually
+
+Your friend is just using a shortcut provided by the build system.
+
+Both are valid.
