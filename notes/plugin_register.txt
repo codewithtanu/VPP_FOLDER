@@ -1,0 +1,960 @@
+🧠 What Is VLIB_PLUGIN_REGISTER()?
+
+It is a macro used by VPP to register your shared object (.so) as a plugin.
+
+When VPP starts:
+
+vpp
+   ↓
+Loads all .so files from:
+   /usr/lib/vpp_plugins/
+   (or build-root/.../vpp_plugins/)
+   ↓
+Looks for VLIB_PLUGIN_REGISTER structure
+   ↓
+Registers plugin metadata
+
+So this macro tells VPP:
+
+"Hey, I am a valid VPP plugin. Load me."
+
+🔍 What Does This Macro Expand To?
+
+Internally, it expands into something like:
+
+static vlib_plugin_registration_t vlib_plugin_registration = {
+    .version = "...",
+    .description = "...",
+};
+
+And it places this structure into a special section in the ELF file.
+
+📦 Where Is It Stored?
+
+When you compile your plugin:
+
+make build
+
+It creates:
+
+packet_counter_plugin.so
+
+Inside that .so file:
+
+Your node code
+
+Your CLI code
+
+Your counters
+
+This plugin registration struct
+
+All stored in the ELF binary.
+
+🧠 How VPP Finds It
+
+At runtime:
+
+VPP scans plugin directory
+
+Uses dlopen() to load .so
+
+Searches for vlib_plugin_registration
+
+Reads:
+
+version
+
+description
+
+Registers plugin in internal plugin list
+
+You can see it with:
+
+show plugins
+🔥 What Does .version = "1.0" Do?
+
+It:
+
+Stores a version string in the plugin metadata
+
+Used for compatibility check
+
+Helps debugging
+
+Shown in show plugins
+
+Example output:
+
+Plugin                Version   Description
+packet_counter       1.0       Simple protocol counter using global variables
+
+It does NOT affect packet processing.
+
+It’s metadata only.
+
+🔥 What Does .description Do?
+
+Just human-readable information.
+
+Stored in plugin registry structure.
+
+Used only for:
+
+show plugins
+🧠 Where Is This Data Stored in Memory?
+
+When VPP loads plugin:
+
+The vlib_plugin_registration_t structure is:
+
+Copied into VPP plugin main structure
+
+Stored in a global plugin list
+
+Internally something like:
+
+vlib_main.plugin_main.plugin_info[]
+
+So it becomes part of VPP's runtime memory.
+
+🔬 Important: What It Does NOT Do
+
+It does NOT:
+
+Register your node
+
+Attach your feature arc
+
+Enable your plugin
+
+Allocate counters
+
+Create graph nodes
+
+It ONLY registers plugin metadata.
+
+🧠 What Actually Registers Your Node?
+
+This:
+
+VLIB_REGISTER_NODE(...)
+
+And this:
+
+VNET_FEATURE_INIT(...)
+
+Those are separate mechanisms.
+
+🎯 Full Plugin Lifecycle
+
+When VPP starts:
+
+Load .so
+
+Read VLIB_PLUGIN_REGISTER
+
+Run constructor functions
+
+Register nodes (VLIB_REGISTER_NODE)
+
+Register feature arcs (VNET_FEATURE_INIT)
+
+Make plugin available
+
+🏗️ Internally How It Is Implemented
+
+The macro roughly expands into:
+
+__attribute__((constructor))
+static void register_plugin() {
+    // register into vpp plugin framework
+}
+
+And also places metadata in special ELF section.
+
+That’s how dynamic loading works.
+
+🧠 Why VPP Uses This Design
+
+Because:
+
+Plugins are separate .so files
+
+Can be added/removed without recompiling VPP
+
+Metadata helps compatibility
+
+Clean modular architecture
+
+🔥 For Your Case
+
+Your line:
+
+.description = "Simple protocol counter using global variables"
+
+Is basically documenting that your counters are:
+
+global variables (not per-thread safe)
+
+Good for learning,
+Not production safe.
+
+
+
+1️⃣ How VPP Dynamically Links Plugins
+
+VPP plugins are:
+
+Shared Libraries (.so files)
+
+Example location:
+
+/usr/lib/x86_64-linux-gnu/vpp_plugins/
+or
+build-root/install-vpp-native/vpp/lib/.../vpp_plugins/
+🔹 What Happens When VPP Starts?
+
+When you run:
+
+sudo vpp
+
+Startup flow:
+
+vpp main()
+   ↓
+vlib_main_init()
+   ↓
+vlib_load_new_plugins()
+   ↓
+Scan plugin directory
+   ↓
+dlopen(plugin.so)
+   ↓
+Find VLIB_PLUGIN_REGISTER structure
+   ↓
+Register plugin
+
+So VPP uses Linux dynamic linker:
+
+dlopen()
+dlsym()
+dlclose()
+🔹 What is dlopen?
+
+It loads a shared object into process memory at runtime.
+
+So:
+
+packet_counter_plugin.so
+
+gets mapped into VPP process address space.
+
+Your:
+
+nodes
+
+CLI commands
+
+global variables
+
+feature registrations
+
+become part of VPP memory.
+
+🔹 How Does VPP Detect Your Plugin?
+
+Inside your .so file there is:
+
+VLIB_PLUGIN_REGISTER()
+
+This creates a symbol:
+
+vlib_plugin_registration
+
+After dlopen, VPP calls:
+
+dlsym(handle, "vlib_plugin_registration")
+
+If found → valid VPP plugin.
+
+🔥 Important
+
+Plugins are NOT statically linked.
+
+They are:
+
+Runtime dynamically loaded modules
+
+Just like:
+
+Linux kernel modules (.ko)
+
+Apache modules
+
+Nginx modules
+
+2️⃣ How Plugin Loading Order Works
+
+Very important concept 🔥
+
+🔹 Loading Order = Alphabetical Order
+
+By default:
+
+VPP scans plugin directory
+and loads .so files in sorted filename order
+
+Example:
+
+acl_plugin.so
+dpdk_plugin.so
+my_counter_plugin.so
+nat_plugin.so
+
+They load in that order.
+
+🔹 Does Load Order Matter?
+
+Usually NO.
+
+Because:
+
+Nodes register independently
+
+Feature arcs resolve dependencies later
+
+BUT it can matter if:
+
+Plugin depends on another plugin
+
+You call symbols from another plugin
+
+Then dependency must be loaded first.
+
+🔹 How Feature Ordering Works
+
+Feature execution order is NOT plugin load order.
+
+It is controlled by:
+
+.runs_before = VNET_FEATURES("ip4-lookup")
+.runs_after  = VNET_FEATURES("acl-plugin")
+
+So even if plugin loads later,
+feature position is controlled separately.
+
+3️⃣ How To Disable Plugin Loading
+
+Very useful for debugging 🔥
+
+🔹 Method 1: startup.conf (Recommended)
+
+Edit:
+
+/etc/vpp/startup.conf
+
+Add:
+
+plugins {
+  plugin packet_counter_plugin.so disable
+}
+
+Then restart VPP.
+
+Plugin will NOT load.
+
+🔹 Method 2: Disable All Plugins
+
+In startup.conf:
+
+plugins {
+  plugin default disable
+}
+
+This disables everything.
+
+Then enable only specific ones:
+
+plugins {
+  plugin default disable
+  plugin dpdk_plugin.so enable
+}
+🔹 Method 3: Rename File
+
+Rename:
+
+mv packet_counter_plugin.so packet_counter_plugin.so.disabled
+
+VPP won’t load it.
+
+🔹 Method 4: Remove from Directory
+
+Delete or move it from:
+
+vpp_plugins directory
+🔬 What Happens If Plugin Is Disabled?
+
+Its nodes are not registered
+
+Its CLI commands disappear
+
+Its feature arcs disappear
+
+Its memory is not allocated
+
+It’s like plugin never existed.
+
+🧠 Deep Internal Architecture Summary
+
+When VPP starts:
+
+Scan directory
+   ↓
+dlopen()
+   ↓
+Read metadata
+   ↓
+Register nodes
+   ↓
+Register feature arcs
+   ↓
+Make CLI commands available
+   ↓
+Ready
+🚀 For You (Since You're Doing Real Plugin Work)
+
+Now here is something important:
+
+If your plugin does not load,
+check:
+
+show plugins
+
+If not listed → loading problem.
+
+If listed but node not running →
+feature arc problem.
+
+If node running but counters wrong →
+logic problem.
+
+This is how professional VPP debugging works.
+
+🎯 Advanced Question For You
+
+Do you want to understand:
+
+How VPP ensures symbol isolation between plugins?
+
+How constructor attributes work in GCC?
+
+How plugin memory is freed?
+
+How multi-process VPP handles plugins?
+
+How worker threads see plugin variables?
+
+Tell me the next level you want 🔥
+
+How plugin memory is freed?
+
+How plugin memory is freed?
+
+How multi-process VPP handles plugins?
+
+How worker threads see plugin variables?
+
+Excellent. Now we are in real VPP internals territory 🔥
+
+You specifically want:
+
+How plugin memory is freed?
+
+Let’s go deep but structured.
+
+🧠 First: What “Plugin Memory” Actually Means
+
+A VPP plugin .so contains:
+
+Code (text section)
+
+Global variables (data section)
+
+Static variables (bss section)
+
+Heap allocations (if you malloc / vec_alloc etc.)
+
+Node registrations
+
+CLI registrations
+
+Feature registrations
+
+When VPP loads plugin using:
+
+dlopen("packet_counter_plugin.so")
+
+The Linux dynamic loader:
+
+Maps code into memory
+
+Maps global/static variables
+
+Resolves symbols
+
+So the plugin becomes part of the VPP process.
+
+🔥 Important Reality
+
+👉 VPP does NOT unload plugins during runtime.
+👉 Plugin memory is freed only when VPP process exits.
+
+There is NO hot-unload mechanism.
+
+📦 What Happens When VPP Exits?
+
+When you stop VPP:
+
+sudo killall vpp
+
+or
+
+sudo systemctl stop vpp
+
+Linux kernel:
+
+Terminates process
+
+Unmaps all memory regions
+
+Frees:
+
+Plugin code
+
+Plugin globals
+
+Heap allocations
+
+Buffers
+
+Graph nodes
+
+Releases everything back to OS
+
+So technically:
+
+👉 Plugin memory is freed by the OS
+👉 Not by VPP manually
+
+🧠 What About dlclose()?
+
+VPP does NOT call:
+
+dlclose(plugin_handle);
+
+Because:
+
+Graph nodes depend on plugin
+
+Feature arcs depend on plugin
+
+Function pointers are embedded in graph
+
+Unloading would break graph consistency
+
+So plugins are considered permanent.
+
+⚠ What About Heap Allocations Inside Plugin?
+
+If inside your plugin you allocate memory like:
+
+vec_add1(my_vec, x);
+clib_mem_alloc(...)
+
+That memory:
+
+Is allocated from VPP heap
+
+Remains until VPP exits
+
+Is NOT automatically freed unless you free it manually
+
+But since VPP doesn’t unload plugin,
+memory leak inside plugin only matters during runtime.
+
+🔬 Where Is Plugin Memory Stored?
+
+Everything runs inside one big process:
+
+VPP process
+   ├── Main heap
+   ├── Buffer pool
+   ├── Worker thread heaps
+   ├── Plugin code section
+   └── Plugin data section
+
+Your global variable:
+
+packet_counter_t counter;
+
+is stored in:
+
+.data section of plugin .so
+
+mapped into VPP address space.
+
+🧠 What About Multi-Process VPP?
+
+VPP supports:
+
+Primary process
+Secondary processes (vpp-api clients)
+
+Only the primary process loads plugins.
+
+Secondary processes:
+
+Do NOT load plugins
+
+Interact via shared memory API
+
+Use binary API messages
+
+So plugin memory is not duplicated across processes.
+
+🧵 How Worker Threads See Plugin Variables?
+
+Important 🔥
+
+VPP is multi-threaded (workers).
+
+All workers share:
+
+Same address space
+
+Same global variables
+
+So your:
+
+packet_counter_t counter;
+
+is:
+
+👉 Shared across all worker threads
+👉 NOT thread-safe
+
+That means:
+
+If 4 workers increment:
+
+counter.icmp++
+
+Race condition happens.
+
+🧠 Proper Way in Multi-Thread VPP
+
+Instead of global counter:
+
+Use:
+
+vlib_node_increment_counter(...)
+
+or
+
+Use per-thread storage:
+
+vlib_get_thread_index()
+
+and maintain:
+
+counter[thread_index]
+
+Then aggregate during CLI show.
+
+🔥 Summary
+How Plugin Memory Is Freed?
+
+Answer:
+
+It is NOT manually freed.
+It is automatically released when VPP process exits.
+VPP does not support dynamic plugin unload.
+
+🎯 Why VPP Doesn’t Support Unloading
+
+Because:
+
+Graph nodes hold function pointers
+
+Feature arcs hold references
+
+Workers execute plugin code
+
+Removing it would corrupt execution
+
+So design decision:
+
+Plugins are permanent once loaded.
+🚀 Now Very Important Question For You
+
+Since you are writing packet counter plugin:
+
+Are you running:
+
+show threads
+
+How many workers do you have?
+
+Because if you have >1 worker,
+your global counter is technically incorrect.
+
+Do you want me to explain:
+
+Proper per-thread safe counter design?
+
+How VPP memory allocator works internally?
+
+How buffer memory pools are freed?
+
+How VPP shared memory segment works?
+
+Pick your next depth 🔥
+
+
+🧠 First: What “Plugin Memory” Actually Means
+
+A VPP plugin .so contains:
+
+Code (text section)
+
+Global variables (data section)
+
+Static variables (bss section)
+
+Heap allocations (if you malloc / vec_alloc etc.)
+
+Node registrations
+
+CLI registrations
+
+Feature registrations
+
+When VPP loads plugin using:
+
+dlopen("packet_counter_plugin.so")
+
+The Linux dynamic loader:
+
+Maps code into memory
+
+Maps global/static variables
+
+Resolves symbols
+
+So the plugin becomes part of the VPP process.
+
+🔥 Important Reality
+
+👉 VPP does NOT unload plugins during runtime.
+👉 Plugin memory is freed only when VPP process exits.
+
+There is NO hot-unload mechanism.
+
+📦 What Happens When VPP Exits?
+
+When you stop VPP:
+
+sudo killall vpp
+
+or
+
+sudo systemctl stop vpp
+
+Linux kernel:
+
+Terminates process
+
+Unmaps all memory regions
+
+Frees:
+
+Plugin code
+
+Plugin globals
+
+Heap allocations
+
+Buffers
+
+Graph nodes
+
+Releases everything back to OS
+
+So technically:
+
+👉 Plugin memory is freed by the OS
+👉 Not by VPP manually
+
+🧠 What About dlclose()?
+
+VPP does NOT call:
+
+dlclose(plugin_handle);
+
+Because:
+
+Graph nodes depend on plugin
+
+Feature arcs depend on plugin
+
+Function pointers are embedded in graph
+
+Unloading would break graph consistency
+
+So plugins are considered permanent.
+
+⚠ What About Heap Allocations Inside Plugin?
+
+If inside your plugin you allocate memory like:
+
+vec_add1(my_vec, x);
+clib_mem_alloc(...)
+
+That memory:
+
+Is allocated from VPP heap
+
+Remains until VPP exits
+
+Is NOT automatically freed unless you free it manually
+
+But since VPP doesn’t unload plugin,
+memory leak inside plugin only matters during runtime.
+
+🔬 Where Is Plugin Memory Stored?
+
+Everything runs inside one big process:
+
+VPP process
+   ├── Main heap
+   ├── Buffer pool
+   ├── Worker thread heaps
+   ├── Plugin code section
+   └── Plugin data section
+
+Your global variable:
+
+packet_counter_t counter;
+
+is stored in:
+
+.data section of plugin .so
+
+mapped into VPP address space.
+
+🧠 What About Multi-Process VPP?
+
+VPP supports:
+
+Primary process
+Secondary processes (vpp-api clients)
+
+Only the primary process loads plugins.
+
+Secondary processes:
+
+Do NOT load plugins
+
+Interact via shared memory API
+
+Use binary API messages
+
+So plugin memory is not duplicated across processes.
+
+🧵 How Worker Threads See Plugin Variables?
+
+Important 🔥
+
+VPP is multi-threaded (workers).
+
+All workers share:
+
+Same address space
+
+Same global variables
+
+So your:
+
+packet_counter_t counter;
+
+is:
+
+👉 Shared across all worker threads
+👉 NOT thread-safe
+
+That means:
+
+If 4 workers increment:
+
+counter.icmp++
+
+Race condition happens.
+
+🧠 Proper Way in Multi-Thread VPP
+
+Instead of global counter:
+
+Use:
+
+vlib_node_increment_counter(...)
+
+or
+
+Use per-thread storage:
+
+vlib_get_thread_index()
+
+and maintain:
+
+counter[thread_index]
+
+Then aggregate during CLI show.
+
+🔥 Summary
+How Plugin Memory Is Freed?
+
+Answer:
+
+It is NOT manually freed.
+It is automatically released when VPP process exits.
+VPP does not support dynamic plugin unload.
+
+🎯 Why VPP Doesn’t Support Unloading
+
+Because:
+
+Graph nodes hold function pointers
+
+Feature arcs hold references
+
+Workers execute plugin code
+
+Removing it would corrupt execution
+
+So design decision:
+
+Plugins are permanent once loaded.
+🚀 Now Very Important Question For You
+
+Since you are writing packet counter plugin:
+
+Are you running:
+
+show threads
+
+How many workers do you have?
+
+Because if you have >1 worker,
+your global counter is technically incorrect.
+

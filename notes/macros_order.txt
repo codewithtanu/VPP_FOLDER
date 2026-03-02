@@ -1,0 +1,225 @@
+Excellent 🔥
+Now you’re asking about initialization order inside VPP, which is very important for real plugin development.
+
+You said your plugin has 4 macros:
+
+VLIB_PLUGIN_REGISTER
+
+VLIB_REGISTER_NODE
+
+VLIB_CLI_COMMAND
+
+VLIB_INIT_FUNCTION
+
+You want to know:
+
+In what order are these executed / registered?
+
+Let’s break it down cleanly.
+
+🧠 First: Important Concept
+
+These macros do NOT execute in the order they appear in your file.
+
+They register structures into special ELF sections.
+
+At runtime, VPP scans those sections and executes them in a specific order.
+
+So order is controlled by VPP core, not your file position.
+
+🚀 Complete Startup Flow (Real Order)
+
+When you start VPP:
+
+sudo vpp
+
+The internal order is roughly:
+
+1️⃣ dlopen(plugin.so)
+2️⃣ VLIB_PLUGIN_REGISTER metadata is read
+3️⃣ Node registrations processed
+4️⃣ CLI command registrations processed
+5️⃣ INIT functions executed
+6️⃣ VPP finishes boot
+
+Now let’s explain each one.
+
+1️⃣ VLIB_PLUGIN_REGISTER
+
+Example:
+
+VLIB_PLUGIN_REGISTER() = {
+  .version = "1.0",
+  .description = "Simple protocol counter",
+};
+What happens?
+
+This does NOT “execute”
+
+It just places metadata in the plugin
+
+After dlopen(), VPP reads this structure.
+
+It registers:
+
+plugin name
+
+version
+
+description
+
+You can see it using:
+
+show plugins
+
+So this is read immediately after dlopen.
+
+2️⃣ VLIB_REGISTER_NODE
+
+Example:
+
+VLIB_REGISTER_NODE(packet_counter_node) = {
+    .name = "packet-counter-node",
+};
+What happens?
+
+During plugin load:
+
+VPP scans for all node registration structures
+
+Adds your node to the global graph
+
+Allocates node index
+
+Initializes runtime structures
+
+At this stage:
+
+Your node exists in graph
+But is not yet attached to any interface
+
+You can verify with:
+
+show node
+3️⃣ VLIB_CLI_COMMAND
+
+Example:
+
+VLIB_CLI_COMMAND(show_counter_command, static) = {
+    .path = "show packets",
+    .function = show_packet_counter,
+};
+
+During plugin load:
+
+CLI command gets registered
+
+Added to CLI command tree
+
+Becomes usable in VPP CLI
+
+After this point, you can type:
+
+show packets
+
+Even before feature is enabled.
+
+4️⃣ VLIB_INIT_FUNCTION
+
+Example:
+
+VLIB_INIT_FUNCTION(packet_counter_init);
+
+This is different.
+
+This function is actually executed.
+
+When?
+
+After:
+
+All plugins are loaded
+
+All nodes registered
+
+All CLI commands registered
+
+Then VPP runs all init functions in dependency order.
+
+So this is the first time your code actually executes.
+
+🧠 Final Execution Order Summary
+
+Here is the clean order:
+
+1️⃣ dlopen(plugin.so)
+2️⃣ Read VLIB_PLUGIN_REGISTER metadata
+3️⃣ Register all nodes (VLIB_REGISTER_NODE)
+4️⃣ Register CLI commands (VLIB_CLI_COMMAND)
+5️⃣ Register feature arcs (VNET_FEATURE_INIT)
+6️⃣ Execute VLIB_INIT_FUNCTION functions
+7️⃣ VPP finishes startup
+🔥 Important: Feature Registration Timing
+
+You also have:
+
+VNET_FEATURE_INIT(...)
+
+This happens during node registration phase.
+
+It registers your feature node into feature arc system.
+
+But it does NOT enable it.
+
+Enabling happens only when you run:
+
+set interface feature tap0 device-input packet-counter-node
+🧠 Think of It Like This
+
+Your plugin loading is like building a house:
+
+Stage	What Happens
+Plugin Register	Add house nameplate
+Node Register	Build rooms
+CLI Register	Add control buttons
+Feature Register	Add wiring
+Init Function	Turn electricity ON
+🔬 One Very Important Detail
+
+VLIB_INIT_FUNCTION runs only once at startup.
+
+If you restart VPP → runs again.
+
+It does NOT run when you enable feature.
+
+⚠ Common Mistake
+
+Some people think:
+
+INIT function runs when feature is enabled.
+
+No.
+
+INIT runs during startup only.
+
+Feature enabling is separate CLI action.
+
+🧵 Multi-Thread Detail
+
+All registration steps happen in main thread before workers start.
+
+Workers start after initialization.
+
+So registration is single-threaded and safe.
+
+🎯 Very Important For You
+
+If your counters are zero, check:
+
+Is node registered? → show node
+
+Is feature enabled? → show interface features tap0
+
+Is node executing? → show runtime
+
+Is worker count > 1? → show threads
