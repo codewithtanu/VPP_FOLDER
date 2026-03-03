@@ -1,0 +1,269 @@
+Excellent 🔥 this is the exact right question.
+
+You now have two nodes:
+
+packet_count  (Node A)
+      ↓
+packet_count_pass  (Node B)
+      ↓
+ip4-lookup
+
+And you’re asking:
+
+How is the function connected to the node?
+When is it called?
+How does execution move from Node A to Node B?
+
+Let’s go step-by-step very clearly.
+
+🧠 Step 1 — How Function Is Connected To Node
+
+When you write:
+
+VLIB_NODE_FN(packet_count_node)
+(vlib_main_t *vm,
+ vlib_node_runtime_t *node,
+ vlib_frame_t *frame)
+
+This macro expands to something like:
+
+static uword packet_count_node_fn(vlib_main_t *vm,
+                                  vlib_node_runtime_t *node,
+                                  vlib_frame_t *frame);
+
+Then in:
+
+VLIB_REGISTER_NODE(packet_count_node)
+
+VPP automatically links:
+
+registration.function = packet_count_node_fn;
+
+So internally:
+
+vlib_node_t.function = packet_count_node_fn
+
+Same happens for:
+
+packet_count_pass_node_fn
+
+So both functions are stored as function pointers inside vlib_node_t.
+
+🧠 Step 2 — What Happens at Startup
+
+During plugin load:
+
+1️⃣ VPP reads all vlib_node_registration_t
+2️⃣ Calls vlib_register_node()
+3️⃣ Creates real vlib_node_t
+4️⃣ Resolves .next_nodes strings to node indices
+
+So this:
+
+.next_nodes = {
+  [0] = "packet_count_pass",
+},
+
+gets converted to:
+
+node->next_nodes[0] = node_index_of_packet_count_pass
+
+Now the graph edge is established.
+
+🧠 Step 3 — When Is packet_count_node_fn() Called?
+
+A node function is called ONLY when:
+
+A previous node forwards packets to it
+
+Or it is an input node
+
+Or attached via feature arc
+
+So your Node A must be connected somewhere upstream.
+
+Example flow:
+
+ip4-input
+   ↓
+packet_count
+
+If Node A is not connected → it never runs.
+
+🧠 Step 4 — Execution Flow at Runtime
+
+Now assume Node A is connected properly.
+
+Worker thread loop (simplified):
+
+while (1)
+{
+    node = next_scheduled_node;
+    call node->function(vm, runtime, frame);
+}
+
+So execution goes like this:
+
+🔹 1️⃣ Some upstream node forwards to packet_count
+
+It does something like:
+
+next_index = X;
+
+Where X resolves to packet_count.
+
+Then dispatcher schedules packet_count.
+
+🔹 2️⃣ packet_count_node_fn() Runs
+
+This part of your code executes:
+
+node_a_frames++;
+vlib_cli_output(...);
+
+It processes all packets in frame.
+
+Then this line is critical:
+
+nexts[i] = 0;
+
+That means:
+
+Use next_nodes[0]
+
+From registration:
+
+.next_nodes = {
+  [0] = "packet_count_pass",
+},
+
+So:
+
+next index 0 → packet_count_pass
+🔹 3️⃣ vlib_buffer_enqueue_to_next()
+
+This function:
+
+Takes buffer indices
+Looks up node->next_nodes[next_index]
+Schedules that node
+
+So now:
+
+packet_count_pass is scheduled
+🔹 4️⃣ packet_count_pass_node_fn() Runs
+
+Same mechanism.
+
+It sets:
+
+nexts[i] = 0;
+
+And since its registration (you didn’t show it fully, but assume):
+
+.next_nodes = {
+  [0] = "ip4-lookup",
+},
+
+Then:
+
+next index 0 → ip4-lookup
+
+And execution continues.
+
+🔥 Full Runtime Flow
+Worker Thread
+
+Upstream Node
+      ↓
+packet_count_node_fn()
+      ↓
+packet_count_pass_node_fn()
+      ↓
+ip4-lookup
+
+All of this happens on the SAME worker thread.
+
+🧠 Important: No Function Calls Between Nodes
+
+This is very important.
+
+Node A does NOT call:
+
+packet_count_pass_node_fn(...)
+
+Instead:
+
+It enqueues buffers.
+
+Then dispatcher later calls Node B.
+
+So it’s not:
+
+A() → B() → C()
+
+It is:
+
+A() finishes
+Dispatcher schedules B()
+B() finishes
+Dispatcher schedules C()
+
+Graph scheduling, not direct function chaining.
+
+🧵 How Does VPP Know Which Function To Call?
+
+Inside vlib_node_t:
+
+uword (*function)(vlib_main_t *, vlib_node_runtime_t *, vlib_frame_t *);
+
+Dispatcher does:
+
+node->function(vm, runtime, frame);
+
+So function pointer determines execution.
+
+🎯 When Exactly Is It Called?
+
+Node function is called when:
+
+It has a non-empty frame in its input queue
+
+Worker dispatcher selects it
+
+Scheduling rules allow it
+
+If no packets → node does not run.
+
+⚠ Important About Your Debug Print
+
+This line:
+
+vlib_cli_output(vm, ...)
+
+Is very expensive.
+
+It runs per frame.
+
+If traffic is high → it will slow VPP dramatically.
+
+Normally we use tracing instead.
+
+🧠 Final Clear Answer
+
+How is function connected?
+
+VLIB_NODE_FN → defines function
+VLIB_REGISTER_NODE → stores function pointer in node struct
+Graph build → resolves next_nodes
+Dispatcher → calls function pointer
+
+When is it called?
+
+When a previous node enqueues packets to it
+
+How does it move to next node?
+
+nexts[i] = 0
+→ maps to next_nodes[0]
+→ dispatcher schedules next node

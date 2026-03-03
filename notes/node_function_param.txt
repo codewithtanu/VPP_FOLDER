@@ -1,0 +1,438 @@
+Perfect 🔥
+Now we’ll clearly and deeply explain the three parameters of a VPP node function:
+
+uword packet_count_node_fn(
+    vlib_main_t *vm,
+    vlib_node_runtime_t *node,
+    vlib_frame_t *frame)
+
+These three are always passed by the VPP dispatcher.
+You never call this function yourself.
+
+Let’s break each one down properly.
+
+🧠 1️⃣ vlib_main_t *vm
+What it is
+
+This is the main VPP context structure.
+
+Think of it as:
+
+The Brain of VPP
+
+It contains almost everything:
+
+Buffer pools
+
+Node pools
+
+Thread info
+
+Memory heaps
+
+Error counters
+
+Worker index
+
+CLI output system
+
+Why your node needs it
+
+Whenever you call:
+
+vlib_get_buffer(vm, from[i]);
+
+You are using vm to access:
+
+The global buffer pool
+
+Memory structures
+
+When you call:
+
+vlib_cli_output(vm, ...);
+
+You are using vm to access the CLI system.
+
+Important fields inside vm
+
+Example useful ones:
+
+vm->thread_index      // Which worker thread you are on
+vm->buffer_main       // Buffer system
+vm->node_main         // Graph system
+🧠 2️⃣ vlib_node_runtime_t *node
+What it is
+
+This is the runtime version of your node for the current worker thread.
+
+Remember:
+
+vlib_node_t → global node definition
+
+vlib_node_runtime_t → per-thread execution structure
+
+So if you have 4 workers:
+
+packet_count runtime (worker 0)
+packet_count runtime (worker 1)
+packet_count runtime (worker 2)
+packet_count runtime (worker 3)
+
+Each worker has its own runtime structure.
+
+What it contains
+
+Inside it:
+
+Node index
+
+Cached next node indices
+
+Runtime counters
+
+State flags
+
+It is optimized for fast execution.
+
+Why it is passed
+
+When you call:
+
+vlib_buffer_enqueue_to_next(vm, node, from, nexts, n_left_from);
+
+The node parameter tells VPP:
+
+Which node is currently running
+
+Which next node mapping to use
+
+It uses:
+
+node->next_nodes[next_index]
+
+to resolve forwarding.
+
+🧠 3️⃣ vlib_frame_t *frame
+
+This is the most important parameter for packet processing.
+
+What is a frame?
+
+A frame is a batch of packets.
+
+VPP never processes one packet at a time.
+
+Instead it processes a batch like:
+
+Frame contains:
+  buffer_index_1
+  buffer_index_2
+  buffer_index_3
+  ...
+Important fields
+frame->n_vectors
+
+= number of packets in this batch.
+
+vlib_frame_vector_args(frame)
+
+= pointer to array of buffer indices.
+
+So when you do:
+
+u32 *from = vlib_frame_vector_args(frame);
+
+You get an array like:
+
+from[0] → buffer index of packet 1
+from[1] → buffer index of packet 2
+...
+
+Then:
+
+vlib_get_buffer(vm, from[i]);
+
+gives you actual packet memory.
+
+🔥 How These 3 Work Together
+
+When dispatcher runs:
+
+Call:
+packet_count_node_fn(vm, runtime_node, frame);
+
+Inside:
+
+Parameter	Purpose
+vm	Access global VPP state
+node	Access runtime node state
+frame	Access batch of packets
+🧠 Execution Example
+
+Imagine 64 packets arrive.
+
+VPP does:
+
+frame->n_vectors = 64
+
+Then your function runs once.
+
+You process all 64 packets inside loop.
+
+Then forward them.
+
+Then function returns.
+
+⚡ Why This Design Is Powerful
+
+Because:
+
+No function call per packet
+
+Batch processing
+
+Cache-friendly
+
+Lock-free multi-thread execution
+
+🎯 Important Concept
+
+You cannot change this signature:
+
+(vlib_main_t *, vlib_node_runtime_t *, vlib_frame_t *)
+
+Because dispatcher expects exactly this.
+
+If you need extra data:
+
+Use global variables
+
+Use runtime_data_bytes
+
+Use buffer metadata
+
+🔬 Very Deep Insight
+
+Each worker thread has:
+
+its own vm
+its own node_runtime
+its own frame
+
+But:
+
+All share same node definition
+
+That’s how VPP scales.
+
+🚀 Final Mental Model
+
+Think of it like:
+
+vm     = Entire VPP system context
+node   = This node’s runtime identity on this worker
+frame  = Batch of packets to process
+
+If you want, next we can go into:
+
+What exactly is inside vlib_frame_t?
+
+What is vlib_buffer_t?
+
+How enqueue_to_next works internally?
+
+How dispatcher loop is written?
+
+How per-thread memory works?
+
+Tell me the next layer 🔥
+
+when we fill these parameters 
+
+Excellent 🔥
+Now this is the exact right question:
+
+When do we fill these parameters?
+Do we initialize vm, node, frame ourselves?
+
+The answer is:
+
+❌ You NEVER fill them.
+✅ VPP fills them automatically when it calls your node.
+
+Let’s explain clearly.
+
+🧠 Who Calls Your Node Function?
+
+You wrote:
+
+uword packet_count_node_fn(
+    vlib_main_t *vm,
+    vlib_node_runtime_t *node,
+    vlib_frame_t *frame)
+
+You never call this.
+
+The VPP dispatcher calls it.
+
+Inside VPP main loop (simplified):
+
+while (1)
+{
+    node = next_scheduled_node;
+    frame = node->pending_frame;
+
+    node->function(vm, runtime_node, frame);
+}
+
+So VPP itself passes:
+
+vm
+
+node
+
+frame
+
+🔥 When Exactly Are They Filled?
+
+Let’s follow a packet.
+
+🟢 Step 1 — Packet Arrives
+
+Example:
+
+tap-input receives packets
+
+Driver node creates a frame:
+
+frame->n_vectors = number_of_packets;
+frame->vector_args = buffer indices;
+
+So frame is filled here by previous node.
+
+🟢 Step 2 — Packet Is Enqueued To Your Node
+
+When previous node does:
+
+vlib_buffer_enqueue_to_next(vm, node, from, nexts, n_left_from);
+
+VPP:
+
+Allocates or reuses a frame for next node
+
+Fills that frame with buffer indices
+
+Schedules that node
+
+So at this point:
+
+frame for your node is created and filled
+🟢 Step 3 — Dispatcher Picks Your Node
+
+Now worker thread sees:
+
+packet_count has pending frame
+
+Dispatcher calls:
+
+packet_count_node_fn(vm, runtime_node, frame);
+
+Now:
+
+Parameter	Who filled it?
+vm	VPP main thread created it at startup
+node	VPP created runtime node during worker init
+frame	Previous node filled it
+
+You fill NONE of them.
+
+🧠 So What Do You Actually Fill?
+
+Inside your node, YOU fill:
+
+nexts[i] = 0;
+
+That is how you decide:
+
+Where packet goes next.
+
+Then you call:
+
+vlib_buffer_enqueue_to_next(vm, node, from, nexts, n_left_from);
+
+This creates the next frame for next node.
+
+🔥 Important: Parameter Lifecycle
+vm
+
+Created once at VPP startup.
+
+Never recreated.
+Shared pointer.
+
+node
+
+Created during worker thread initialization.
+
+Each worker has its own runtime copy.
+
+frame
+
+Created dynamically whenever packets are forwarded.
+
+Exists only during scheduling.
+
+After your node returns,
+frame may be reused.
+
+🧠 Visual Flow
+Driver node
+   fills frame A
+       ↓
+Dispatcher
+   calls node A with frame A
+       ↓
+node A fills frame B
+       ↓
+Dispatcher
+   calls node B with frame B
+
+You never manually allocate frame for yourself.
+VPP handles frame management.
+
+⚡ Why This Design?
+
+Because:
+
+No malloc per packet
+
+No manual memory management
+
+Lock-free multi-core
+
+High performance
+
+🎯 Final Answer
+
+When we fill these parameters?
+
+You don’t.
+
+VPP fills:
+
+vm at startup
+
+node at worker initialization
+
+frame when packets are enqueued
+
+Your job is only:
+
+Read frame
+
+Process buffers
+
+Decide next node
+
+Enqueue to next
