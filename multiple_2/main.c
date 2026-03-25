@@ -9,6 +9,7 @@ create tap id 0 host-if-name vpp-tap0
 set interface state tap0 up
 set interface ip address tap0 10.10.1.1/24
 set interface feature tap0 packet_count arc ip4-unicast
+set interface feature tap0 myarp-node arc device-input
 
 
 LINUX : -
